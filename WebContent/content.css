@@ -2,8 +2,26 @@ body {
 	white-space: pre;
 }
 
+a,
+a:active,
+a:visited {
+	color: #0069D6;
+}
+
+a:hover {
+	color: #0050A3;
+}
+
 .prop {
 	font-weight: bold;
+}
+
+.prop a,
+.prop a:hover,
+.prop a:active,
+.prop a:visited, {
+	color: black !important;
+	text-decoration: none !important;
 }
 
 .null {
@@ -19,6 +37,10 @@ body {
 }
 
 .string {
+	color: green;
+}
+
+.date {
 	color: green;
 }
 
