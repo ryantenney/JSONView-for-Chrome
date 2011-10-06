@@ -1,12 +1,44 @@
-function JSONFormatter() {
-}
+function JSONFormatter() {}
+
 JSONFormatter.prototype = {
+
 	htmlEncode : function(t) {
-		return t != null ? t.toString().replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : '';
+		return t != null ? t.toString().replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace("&amp;hellip;", "&hellip;") : '';
 	},
 
 	decorateWithSpan : function(value, className) {
 		return '<span class="' + className + '">' + this.htmlEncode(value) + '</span>';
+	},
+
+	tag : function(tag, propName, propVal, contents, encode) {
+		contents = !contents ? "" : encode ? this.htmlEncode(contents) : contents;
+		return '<' + tag + ' ' + propName + '="' + propVal + '">' + contents + '</' + tag + '>';
+	},
+
+	relUrl : function (url) {
+		var loc = "" + document.location;
+		if (loc == url) {
+			return "SAME: .";
+		} else {
+			var i = 0, l = Math.min(loc.length, url.length), mark = 0;
+			while (i < l && loc[i] === url[i]) {
+				if (loc[i] === "/") mark = i;
+				++i;
+			}
+			if (i == url.length) {
+				// up
+				return this.abbreviate(url.replace(/^(http|https):\/\/[^\s\/]+/, ""));
+			} else if (i == loc.length) {
+				// down
+				return "." + this.abbreviate(url.slice(mark));
+			} else {
+				return this.abbreviate(url.replace(/^(http|https):\/\/[^\s\/]+/, ""));
+			}
+		}
+	},
+
+	abbreviate : function (url) {
+		return url.replace(/\/(\w{16})\w+\//g, "/$1&hellip;/");
 	},
 
 	valueToHTML : function(value) {
@@ -16,13 +48,20 @@ JSONFormatter.prototype = {
 		} else if (value && value.constructor == Array) {
 			output += this.arrayToHTML(value);
 		} else if (valueType == 'object') {
-			output += this.objectToHTML(value);
+			switch (type(value)) {
+				case "Date":
+					output += this.dateToHTML(value);
+					break;
+				default:
+				case "Object":
+					output += this.objectToHTML(value);
+					break;
+			}
 		} else if (valueType == 'number') {
 			output += this.decorateWithSpan(value, 'num');
 		} else if (valueType == 'string') {
 			if (/^(http|https):\/\/[^\s]+$/.test(value)) {
-				output += this.decorateWithSpan('"', 'string') + '<a href="' + value + '">' + this.htmlEncode(value) + '</a>'
-						+ this.decorateWithSpan('"', 'string');
+				output += '<a href="' + value + '">' + this.htmlEncode(this.relUrl(value)) + '</a>';
 			} else {
 				output += this.decorateWithSpan('"' + value + '"', 'string');
 			}
@@ -30,6 +69,18 @@ JSONFormatter.prototype = {
 			output += this.decorateWithSpan(value, 'bool');
 		}
 
+		return output;
+	},
+
+	propertyToHTML : function(prop) {
+		output = '<span class="prop">';
+		if (/^(http|https):\/\/[^\s]+$/.test(prop)) {
+			//output += '<a href="' + prop + '">' + this.htmlEncode(prop) + '</a>';
+			output += this.tag("a", "href", prop, prop, true);
+		} else {
+			output += this.htmlEncode(prop);
+		}
+		output += '</span>';
 		return output;
 	},
 
@@ -51,21 +102,28 @@ JSONFormatter.prototype = {
 	},
 
 	objectToHTML : function(json) {
-		var prop, output = '{<ul class="obj collapsible">', hasContents = false;
+		var prop, output = [];
 		for (prop in json) {
-			hasContents = true;
-			output += '<li>';
-			output += '<span class="prop">' + this.htmlEncode(prop) + '</span>: ';
-			output += this.valueToHTML(json[prop]);
-			output += '</li>';
+			output.push(
+				this.propertyToHTML(prop) +
+				': ' +
+				this.valueToHTML(json[prop])
+			);
 		}
-		output += '</ul>}';
 
-		if (!hasContents) {
+		if (!output.length) {
 			output = "{ }";
+		} else if (output.length == 1) {
+			output = '{ ' + output[0] + ' }';
+		} else {
+			output = '{<ul class="obj collapsible"><li>' + output.join('</li><li>') + '</li></ul>}';
 		}
 
 		return output;
+	},
+
+	dateToHTML : function(json) {
+		return "<abbr class=\"date\" title=\"" + json.toISOString() + "\">new Date(" + (+json) + ")<\/abbr>";
 	},
 
 	jsonToHTML : function(json, fnName) {
@@ -110,7 +168,8 @@ function displayObject(jsonText, fnName) {
 	if (!jsonText)
 		return;
 	try {
-		parsedObject = JSON.parse(jsonText);
+		//parsedObject = JSON.parse(jsonText);
+		parsedObject = JSONParse_withDates(jsonText);
 	} catch (e) {
 	}
 	document.body.style.fontFamily = "monospace"; // chrome bug : does not work in external CSS stylesheet
@@ -203,3 +262,66 @@ function load() {
 }
 
 load();
+
+function JSONParse_withDates(str) {
+	if (/new Date\(\d+\)/.test(str)) {
+		str = fixJSONString(sanitizeDates(str));
+		var obj = JSON.parse(str);
+		return interpretDates(obj);
+	} else {
+		return JSON.parse(str);
+	}
+}
+
+// Turn ons: Acyclic graphs.
+// Turn offs: Turn offs: Turn offs: Turn offs: Turn offs: ...
+function walk(object, visitor, context, key, parent) {
+	switch (type(object)) {
+		case "Object":
+			for (var key in object) {
+				if (object.hasOwnProperty(key)) {
+					walk(object[key], visitor, context, key, object);
+				}
+			}
+			break;
+		case "Array":
+			object.forEach(function (value, key, object) {
+				walk(value, visitor, this, key, object);
+			}, context);
+			break;
+		default:
+			visitor.call(context, object, key, parent);
+	}
+}
+
+function sanitizeDates(str) {
+	return str.replace(/(new Date\(\d+\))/g, "\"#####$1#####\"");
+}
+
+function fixJSONString(str) {
+	return str.replace(/([\r\n\{,:]?)(['"]?)(\w*)(['"]?)([\r\n\{,:]?)/g, function($0, $1, $2, $3, $4, $5) {
+		if ($2 == $4 && ($1 || $5 || $0 == "''")) {
+			var val = +$3;
+			if ($2 == "'" || ($2 == "" && $3 != "" && !(val == $3 || $3 == "NaN" || val == Infinity || val == -Infinity))) {
+				$2 = $4 = "\"";
+			}
+		}
+		return $1 + $2 + $3 + $4 + $5;
+	});
+}
+
+function interpretDates(object) {
+	walk(object, function (value, key, object) {
+		if (type(value) === "String") {
+			var m = /^#{5}new Date\((\d+)\)#{5}$/.exec(value);
+			if (m) {
+				object[key] = new Date(parseInt(m[1], 10));
+			}
+		}
+	});
+	return object;
+}
+
+function type(o) {
+	return Object.prototype.toString.call(o).replace(/^\[object (\w+)\]$/, "$1");
+}
